@@ -16,13 +16,74 @@
         <h1>Personal Project Tracker</h1>
         <p class="tagline">Your projects, in one calm place.</p>
       </div>
+      <div class="header-account" id="header-account" hidden>
+        <span class="account-email" id="account-email"></span>
+        <button class="btn btn-quiet btn-small" id="btn-signout">Sign out</button>
+      </div>
     </div>
   </header>
 
+  <!-- offline / error banner -->
+  <div class="banner" id="banner" hidden>
+    <div class="wrap banner-inner">
+      <span id="banner-text"></span>
+      <button class="btn btn-quiet btn-small" id="btn-retry">Try again</button>
+    </div>
+  </div>
+
   <main class="wrap">
 
+    <!-- ============ NOT CONFIGURED YET ============ -->
+    <section id="view-setup" hidden>
+      <div class="notice">
+        <h2>Almost there — one step left</h2>
+        <p>This app is not connected to Supabase yet.</p>
+        <p>Open <code>supabase-config.js</code> and paste in your <strong>Project URL</strong>
+           and <strong>anon key</strong> from the Supabase dashboard
+           (Project Settings → API Keys), then reload this page.</p>
+        <p class="notice-hint">Full instructions are in <code>README.md</code>.</p>
+      </div>
+    </section>
+
+    <!-- ============ SIGN IN / SIGN UP ============ -->
+    <section id="view-auth" hidden>
+      <div class="auth-card">
+        <h2 id="auth-title">Sign in</h2>
+        <p class="auth-sub" id="auth-sub">Your projects are private to your account.</p>
+
+        <form id="auth-form" novalidate>
+          <label class="field">
+            <span class="field-label">Email</span>
+            <input type="email" id="a-email" autocomplete="email" inputmode="email" placeholder="you@example.com">
+          </label>
+
+          <label class="field">
+            <span class="field-label">Password</span>
+            <input type="password" id="a-password" autocomplete="current-password" placeholder="At least 6 characters">
+          </label>
+
+          <p class="error auth-error" id="auth-error" hidden></p>
+          <p class="success auth-success" id="auth-success" hidden></p>
+
+          <button type="submit" class="btn btn-primary btn-block" id="btn-auth-submit">Sign in</button>
+        </form>
+
+        <p class="auth-switch">
+          <span id="auth-switch-text">First time here?</span>
+          <button class="link-btn" id="btn-auth-switch">Create an account</button>
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ LOADING ============ -->
+    <section id="view-loading" hidden>
+      <div class="notice notice-quiet">
+        <p>Loading your projects…</p>
+      </div>
+    </section>
+
     <!-- ============ DASHBOARD ============ -->
-    <section id="view-dashboard">
+    <section id="view-dashboard" hidden>
       <div class="toolbar">
         <p class="count" id="project-count">0 projects</p>
         <button class="btn btn-primary" id="btn-new">+ New Project</button>
@@ -95,8 +156,8 @@
 
   </main>
 
-  <footer class="wrap app-footer">
-    <p class="footer-note">Saved in this browser only (localStorage). Nothing is sent anywhere.</p>
+  <footer class="wrap app-footer" id="app-footer" hidden>
+    <p class="footer-note" id="footer-note">Saved to your Supabase account.</p>
     <button class="btn btn-quiet btn-small" id="btn-reset">Reset to sample data</button>
   </footer>
 
@@ -155,6 +216,8 @@
           <span class="field-label">Notes</span>
           <textarea id="f-notes" rows="2" placeholder="Anything worth remembering."></textarea>
         </label>
+
+        <p class="error" id="form-error" hidden></p>
       </form>
 
       <div class="modal-foot">
@@ -180,6 +243,8 @@
     </div>
   </div>
 
+  <script src="vendor/supabase.js"></script>
+  <script src="supabase-config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

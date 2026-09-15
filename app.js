@@ -1,10 +1,13 @@
-/* Personal Project Tracker — MVP
- * All data lives in this browser's localStorage. No server, no account, no tracking.
+/* Personal Project Tracker
+ * Data lives in Supabase, private to each signed-in account (Row Level Security).
+ * The last successful load is cached in localStorage so the app still *shows*
+ * your projects when the network is down — read-only until it comes back.
  */
 
-var STORAGE_KEY = 'ppt.projects.v1';
-
 var STATUSES = ['Not Started', 'In Progress', 'On Hold', 'Done'];
+
+var LEGACY_KEY = 'ppt.projects.v1';   // the localStorage-only version of this app
+var CACHE_PREFIX = 'ppt.cache.';      // + user id
 
 var SAMPLE_PROJECTS = [
   {
@@ -54,80 +57,16 @@ var SAMPLE_PROJECTS = [
 ];
 
 /* =======================================================
- * State + storage
+ * State
  * ===================================================== */
 
-var projects = [];
-var currentId = null;       // id of the project open in the detail view
-var editingId = null;       // id being edited in the form, or null when adding
-
-function uid() {
-  return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-function normalize(p) {
-  return {
-    id:            p.id || uid(),
-    name:          p.name || 'Untitled project',
-    status:        STATUSES.indexOf(p.status) !== -1 ? p.status : 'Not Started',
-    progress:      clampProgress(p.progress),
-    dueDate:       p.dueDate || '',
-    goal:          p.goal || '',
-    currentStatus: p.currentStatus || '',
-    completedWork: p.completedWork || '',
-    nextActions:   p.nextActions || '',
-    notes:         p.notes || ''
-  };
-}
-
-function clampProgress(v) {
-  var n = parseInt(v, 10);
-  if (isNaN(n)) { return 0; }
-  return Math.max(0, Math.min(100, n));
-}
-
-function load() {
-  var raw = null;
-  try {
-    raw = localStorage.getItem(STORAGE_KEY);
-  } catch (e) {
-    console.warn('localStorage is not available — changes will not be saved.', e);
-    return SAMPLE_PROJECTS.map(normalize);
-  }
-
-  if (raw === null) {
-    // First use on this browser: no key at all means the samples have never
-    // been loaded. Once the key exists (even as an empty list) we never seed again.
-    var seeded = SAMPLE_PROJECTS.map(normalize);
-    projects = seeded;
-    save();
-    return seeded;
-  }
-
-  try {
-    var parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(normalize) : [];
-  } catch (e) {
-    console.warn('Saved data could not be read; starting with an empty list.', e);
-    return [];
-  }
-}
-
-function save() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-  } catch (e) {
-    console.warn('Could not save to localStorage.', e);
-    alert('This browser would not let the app save your data. Private browsing mode is the usual reason.');
-  }
-}
-
-function findProject(id) {
-  for (var i = 0; i < projects.length; i++) {
-    if (projects[i].id === id) { return projects[i]; }
-  }
-  return null;
-}
+var client = null;        // the Supabase client
+var session = null;       // the signed-in session, or null
+var projects = [];        // what is on screen
+var online = true;        // did the last network call succeed?
+var authMode = 'signin';  // 'signin' or 'signup'
+var currentId = null;     // project open in the detail view
+var editingId = null;     // project being edited in the form
 
 /* =======================================================
  * Small helpers
@@ -141,8 +80,12 @@ function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function statusClass(status) {
-  return 's-' + status.toLowerCase().replace(/\s+/g, '-');
+function statusClass(status) { return 's-' + status.toLowerCase().replace(/\s+/g, '-'); }
+
+function clampProgress(v) {
+  var n = parseInt(v, 10);
+  if (isNaN(n)) { return 0; }
+  return Math.max(0, Math.min(100, n));
 }
 
 function lines(text) {
@@ -160,32 +103,146 @@ var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov',
 
 function formatDate(iso) {
   if (!iso) { return 'No due date'; }
-  var parts = iso.split('-');
+  var parts = String(iso).slice(0, 10).split('-');
   if (parts.length !== 3) { return iso; }
   return parseInt(parts[2], 10) + ' ' + MONTHS[parseInt(parts[1], 10) - 1] + ' ' + parts[0];
 }
 
 function isOverdue(p) {
   if (!p.dueDate || p.status === 'Done') { return false; }
-  var today = new Date();
-  var todayIso = today.getFullYear() + '-' +
-    String(today.getMonth() + 1).padStart(2, '0') + '-' +
-    String(today.getDate()).padStart(2, '0');
+  var t = new Date();
+  var todayIso = t.getFullYear() + '-' +
+    String(t.getMonth() + 1).padStart(2, '0') + '-' +
+    String(t.getDate()).padStart(2, '0');
   return p.dueDate < todayIso;
 }
 
 /* =======================================================
- * Rendering
+ * Row <-> project mapping
+ * Postgres uses snake_case; the rest of the app uses camelCase.
+ * ===================================================== */
+
+function fromRow(r) {
+  return {
+    id:            r.id,
+    name:          r.name || 'Untitled project',
+    status:        STATUSES.indexOf(r.status) !== -1 ? r.status : 'Not Started',
+    progress:      clampProgress(r.progress),
+    dueDate:       r.due_date ? String(r.due_date).slice(0, 10) : '',
+    goal:          r.goal || '',
+    currentStatus: r.current_status || '',
+    completedWork: r.completed_work || '',
+    nextActions:   r.next_actions || '',
+    notes:         r.notes || ''
+  };
+}
+
+function toRow(p) {
+  return {
+    name:           p.name,
+    status:         p.status,
+    progress:       clampProgress(p.progress),
+    due_date:       p.dueDate ? p.dueDate : null,
+    goal:           p.goal || '',
+    current_status: p.currentStatus || '',
+    completed_work: p.completedWork || '',
+    next_actions:   p.nextActions || '',
+    notes:          p.notes || ''
+  };
+}
+
+/* =======================================================
+ * Offline cache (read-only copy of the last good load)
+ * ===================================================== */
+
+function cacheKey() {
+  return CACHE_PREFIX + (session && session.user ? session.user.id : 'anon');
+}
+
+function writeCache() {
+  try { localStorage.setItem(cacheKey(), JSON.stringify(projects)); } catch (e) {}
+}
+
+function readCache() {
+  try {
+    var raw = localStorage.getItem(cacheKey());
+    if (!raw) { return null; }
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (e) { return null; }
+}
+
+function clearCache() {
+  try { localStorage.removeItem(cacheKey()); } catch (e) {}
+}
+
+/* =======================================================
+ * Views and banners
+ * ===================================================== */
+
+var VIEWS = ['view-setup', 'view-auth', 'view-loading', 'view-dashboard', 'view-detail'];
+
+function showView(id) {
+  VIEWS.forEach(function (v) { $(v).hidden = (v !== id); });
+  var signedIn = (id === 'view-dashboard' || id === 'view-detail');
+  $('app-footer').hidden = !signedIn;
+  $('header-account').hidden = !session;
+  window.scrollTo(0, 0);
+}
+
+function showBanner(text, showRetry) {
+  $('banner-text').textContent = text;
+  $('btn-retry').hidden = !showRetry;
+  $('banner').hidden = false;
+}
+
+function hideBanner() { $('banner').hidden = true; }
+
+function setOnline(isOnline) {
+  online = isOnline;
+  var writeButtons = ['btn-new', 'btn-edit', 'btn-delete', 'btn-reset', 'btn-load-samples'];
+  writeButtons.forEach(function (id) {
+    var el = $(id);
+    if (el) { el.disabled = !isOnline; }
+  });
+
+  if (isOnline) {
+    hideBanner();
+    $('footer-note').textContent = 'Saved to your Supabase account.';
+  } else {
+    showBanner('Offline — showing your last saved copy. You can read, but not change anything until the connection is back.', true);
+    $('footer-note').textContent = 'Offline — read only.';
+  }
+}
+
+/* A friendlier version of Supabase's own messages. */
+function friendlyError(message) {
+  var m = String(message || '');
+  if (/invalid login credentials/i.test(m))     { return 'Wrong email or password.'; }
+  if (/email not confirmed/i.test(m))           { return 'Please confirm your email address first — check your inbox.'; }
+  if (/user already registered/i.test(m))       { return 'That email already has an account. Try signing in instead.'; }
+  if (/password should be at least/i.test(m))   { return 'Password must be at least 6 characters.'; }
+  if (/signups not allowed|signup is disabled/i.test(m)) { return 'New sign-ups are turned off for this app.'; }
+  if (/unable to validate email|invalid email/i.test(m)) { return 'That does not look like a valid email address.'; }
+  return m || 'Something went wrong.';
+}
+
+/* Network failures throw; API failures come back as { error }. Tell them apart. */
+function isNetworkError(e) {
+  return e instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(String(e && e.message));
+}
+
+/* =======================================================
+ * Dashboard + detail rendering
  * ===================================================== */
 
 function renderDashboard() {
   var grid = $('project-grid');
-  var empty = $('empty-state');
 
   $('project-count').textContent =
     projects.length + (projects.length === 1 ? ' project' : ' projects');
 
-  empty.hidden = projects.length > 0;
+  $('empty-state').hidden = projects.length > 0;
   grid.hidden = projects.length === 0;
   grid.innerHTML = '';
 
@@ -270,16 +327,17 @@ function renderDetail(p) {
   renderList($('d-next'), p.nextActions, 'No next action set.');
 }
 
-/* =======================================================
- * View switching
- * ===================================================== */
+function findProject(id) {
+  for (var i = 0; i < projects.length; i++) {
+    if (projects[i].id === id) { return projects[i]; }
+  }
+  return null;
+}
 
 function showDashboard() {
   currentId = null;
-  $('view-detail').hidden = true;
-  $('view-dashboard').hidden = false;
   renderDashboard();
-  window.scrollTo(0, 0);
+  showView('view-dashboard');
 }
 
 function showDetail(id) {
@@ -287,9 +345,164 @@ function showDetail(id) {
   if (!p) { showDashboard(); return; }
   currentId = id;
   renderDetail(p);
-  $('view-dashboard').hidden = true;
-  $('view-detail').hidden = false;
-  window.scrollTo(0, 0);
+  showView('view-detail');
+}
+
+/* =======================================================
+ * Loading from Supabase
+ * ===================================================== */
+
+function loadProjects() {
+  showView('view-loading');
+
+  return client
+    .from('projects')
+    .select('*')
+    .order('created_at', { ascending: true })
+    .then(function (res) {
+      if (res.error) { throw res.error; }
+      projects = res.data.map(fromRow);
+      writeCache();
+      setOnline(true);
+      showDashboard();
+      return offerMigration();
+    })
+    .catch(function (e) {
+      var cached = readCache();
+      if (isNetworkError(e)) {
+        projects = cached || [];
+        setOnline(false);
+        showDashboard();
+        return;
+      }
+      // A real API error — show it, but still let them read the cache if there is one.
+      projects = cached || [];
+      setOnline(false);
+      showBanner('Could not load your projects: ' + friendlyError(e.message), true);
+      showDashboard();
+    });
+}
+
+/* One-time offer to lift projects out of the old localStorage-only version. */
+function offerMigration() {
+  if (projects.length > 0) { return Promise.resolve(); }
+
+  var legacy = [];
+  try {
+    var raw = localStorage.getItem(LEGACY_KEY);
+    if (raw) { legacy = JSON.parse(raw) || []; }
+  } catch (e) { return Promise.resolve(); }
+
+  if (!Array.isArray(legacy) || legacy.length === 0) { return Promise.resolve(); }
+
+  return askConfirm(
+    'Bring your old projects over?',
+    'This browser still holds ' + legacy.length + ' project(s) from the offline version. ' +
+    'Copy them into your Supabase account now? The local copy is left untouched.',
+    'Copy them over'
+  ).then(function (yes) {
+    if (!yes) { return; }
+    return insertMany(legacy).then(loadProjects);
+  });
+}
+
+function insertMany(list) {
+  var rows = list.map(function (p) {
+    var row = toRow(p);
+    row.user_id = session.user.id;
+    return row;
+  });
+  return client.from('projects').insert(rows).then(function (res) {
+    if (res.error) { throw res.error; }
+  });
+}
+
+/* =======================================================
+ * Authentication
+ * ===================================================== */
+
+function setAuthMode(mode) {
+  authMode = mode;
+  var signup = (mode === 'signup');
+  $('auth-title').textContent = signup ? 'Create your account' : 'Sign in';
+  $('auth-sub').textContent = signup
+    ? 'Pick a password you will remember. Your projects stay private to this account.'
+    : 'Your projects are private to your account.';
+  $('btn-auth-submit').textContent = signup ? 'Create account' : 'Sign in';
+  $('auth-switch-text').textContent = signup ? 'Already have an account?' : 'First time here?';
+  $('btn-auth-switch').textContent = signup ? 'Sign in instead' : 'Create an account';
+  $('a-password').setAttribute('autocomplete', signup ? 'new-password' : 'current-password');
+  $('auth-error').hidden = true;
+  $('auth-success').hidden = true;
+}
+
+function showAuthError(msg) {
+  $('auth-error').textContent = msg;
+  $('auth-error').hidden = false;
+  $('auth-success').hidden = true;
+}
+
+function submitAuth() {
+  var email = $('a-email').value.trim();
+  var password = $('a-password').value;
+
+  if (!email) { showAuthError('Please enter your email address.'); return; }
+  if (!password) { showAuthError('Please enter your password.'); return; }
+
+  var btn = $('btn-auth-submit');
+  var original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Please wait…';
+  $('auth-error').hidden = true;
+
+  var call = (authMode === 'signup')
+    ? client.auth.signUp({ email: email, password: password })
+    : client.auth.signInWithPassword({ email: email, password: password });
+
+  call.then(function (res) {
+    if (res.error) { throw res.error; }
+
+    if (!res.data.session) {
+      // Sign-up succeeded but Supabase is waiting for email confirmation.
+      $('auth-success').textContent =
+        'Account created. Please open the confirmation email, then sign in.';
+      $('auth-success').hidden = false;
+      setAuthMode('signin');
+      $('auth-success').hidden = false;
+      return;
+    }
+
+    session = res.data.session;
+    $('account-email').textContent = session.user.email;
+    $('a-password').value = '';
+    return loadProjects();
+  }).catch(function (e) {
+    showAuthError(isNetworkError(e)
+      ? 'No connection. Please check the network and try again.'
+      : friendlyError(e.message));
+  }).then(function () {
+    btn.disabled = false;
+    btn.textContent = original;
+  });
+}
+
+function signOut() {
+  askConfirm('Sign out?', 'You will need your email and password to get back in.', 'Sign out')
+    .then(function (yes) {
+      if (!yes) { return; }
+      return client.auth.signOut().catch(function () {});
+    })
+    .then(function () {
+      if (!session) { return; }
+      session = null;
+      projects = [];
+      currentId = null;
+      hideBanner();
+      $('a-email').value = '';
+      $('a-password').value = '';
+      setAuthMode('signin');
+      showView('view-auth');
+    });
 }
 
 /* =======================================================
@@ -308,6 +521,7 @@ function fillStatusOptions() {
 }
 
 function openForm(id) {
+  if (!online) { return; }
   editingId = id || null;
   var p = id ? findProject(id) : null;
 
@@ -323,6 +537,7 @@ function openForm(id) {
   $('f-next').value      = p ? p.nextActions : '';
   $('f-notes').value     = p ? p.notes : '';
   $('f-name-error').hidden = true;
+  $('form-error').hidden = true;
 
   $('form-overlay').hidden = false;
   document.body.style.overflow = 'hidden';
@@ -355,20 +570,39 @@ function saveForm() {
     notes:         $('f-notes').value.trim()
   };
 
+  var btn = $('btn-save');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  $('form-error').hidden = true;
+
+  var savedId = editingId;
+  var wasOnDetail = (currentId !== null);   // loadProjects() resets currentId, so remember first
+  var row = toRow(data);
+  var call;
+
   if (editingId) {
-    var existing = findProject(editingId);
-    data.id = editingId;
-    projects[projects.indexOf(existing)] = normalize(data);
+    call = client.from('projects').update(row).eq('id', editingId).select().single();
   } else {
-    data.id = uid();
-    projects.push(normalize(data));
+    row.user_id = session.user.id;
+    call = client.from('projects').insert(row).select().single();
   }
 
-  var savedId = data.id;
-  save();
-  closeForm();
-
-  if (currentId) { showDetail(savedId); } else { showDashboard(); }
+  call.then(function (res) {
+    if (res.error) { throw res.error; }
+    savedId = res.data.id;
+    closeForm();
+    return loadProjects().then(function () {
+      if (wasOnDetail && findProject(savedId)) { showDetail(savedId); }
+    });
+  }).catch(function (e) {
+    $('form-error').textContent = isNetworkError(e)
+      ? 'No connection — your change was not saved. Please try again.'
+      : 'Could not save: ' + friendlyError(e.message);
+    $('form-error').hidden = false;
+  }).then(function () {
+    btn.disabled = false;
+    btn.textContent = 'Save project';
+  });
 }
 
 /* =======================================================
@@ -383,7 +617,6 @@ function askConfirm(title, message, confirmLabel) {
   $('confirm-yes').textContent = confirmLabel || 'Confirm';
   $('confirm-overlay').hidden = false;
   document.body.style.overflow = 'hidden';
-
   return new Promise(function (resolve) { confirmResolve = resolve; });
 }
 
@@ -398,64 +631,88 @@ function closeConfirm(answer) {
 }
 
 /* =======================================================
- * Actions
+ * Delete / samples / reset
  * ===================================================== */
 
 function deleteCurrent() {
+  if (!online) { return; }
   var p = findProject(currentId);
   if (!p) { return; }
 
   askConfirm(
     'Delete this project?',
-    '"' + p.name + '" will be removed from this browser. This cannot be undone.',
+    '"' + p.name + '" will be removed from your account, on every device. This cannot be undone.',
     'Delete'
   ).then(function (yes) {
     if (!yes) { return; }
-    projects = projects.filter(function (x) { return x.id !== p.id; });
-    save();
-    showDashboard();
-  });
-}
-
-function resetToSamples() {
-  askConfirm(
-    'Reset to sample data?',
-    'Every project now in this browser will be replaced by the four sample projects. This cannot be undone.',
-    'Reset'
-  ).then(function (yes) {
-    if (!yes) { return; }
-    projects = SAMPLE_PROJECTS.map(normalize);
-    save();
-    showDashboard();
+    return client.from('projects').delete().eq('id', p.id).then(function (res) {
+      if (res.error) { throw res.error; }
+      currentId = null;
+      return loadProjects();
+    });
+  }).catch(function (e) {
+    showBanner('Could not delete: ' + friendlyError(e.message), true);
   });
 }
 
 function loadSamples() {
-  projects = SAMPLE_PROJECTS.map(normalize);
-  save();
-  showDashboard();
+  if (!online) { return; }
+  insertMany(SAMPLE_PROJECTS)
+    .then(loadProjects)
+    .catch(function (e) {
+      showBanner('Could not add the sample projects: ' + friendlyError(e.message), true);
+    });
+}
+
+function resetToSamples() {
+  if (!online) { return; }
+  askConfirm(
+    'Delete everything and start over?',
+    'All ' + projects.length + ' project(s) in your account will be deleted on every device, ' +
+    'then replaced by the four sample projects. This cannot be undone.',
+    'Delete and reset'
+  ).then(function (yes) {
+    if (!yes) { return; }
+    return client.from('projects').delete().eq('user_id', session.user.id)
+      .then(function (res) {
+        if (res.error) { throw res.error; }
+        return insertMany(SAMPLE_PROJECTS);
+      })
+      .then(loadProjects);
+  }).catch(function (e) {
+    showBanner('Could not reset: ' + friendlyError(e.message), true);
+  });
 }
 
 /* =======================================================
- * Wiring
+ * Boot
  * ===================================================== */
 
-function init() {
-  fillStatusOptions();
-  projects = load();
+function isConfigured() {
+  var url = window.SUPABASE_URL;
+  var key = window.SUPABASE_ANON_KEY;
+  return typeof url === 'string' && url.indexOf('http') === 0 &&
+         typeof key === 'string' && key.length > 20 &&
+         key.indexOf('PASTE_') !== 0;
+}
 
+function wireEvents() {
   $('btn-new').addEventListener('click', function () { openForm(null); });
   $('btn-back').addEventListener('click', showDashboard);
   $('btn-edit').addEventListener('click', function () { openForm(currentId); });
   $('btn-delete').addEventListener('click', deleteCurrent);
   $('btn-reset').addEventListener('click', resetToSamples);
   $('btn-load-samples').addEventListener('click', loadSamples);
+  $('btn-signout').addEventListener('click', signOut);
+  $('btn-retry').addEventListener('click', function () { loadProjects(); });
 
   $('btn-cancel').addEventListener('click', closeForm);
   $('btn-save').addEventListener('click', saveForm);
-  $('project-form').addEventListener('submit', function (e) {
-    e.preventDefault();
-    saveForm();
+  $('project-form').addEventListener('submit', function (e) { e.preventDefault(); saveForm(); });
+
+  $('auth-form').addEventListener('submit', function (e) { e.preventDefault(); submitAuth(); });
+  $('btn-auth-switch').addEventListener('click', function () {
+    setAuthMode(authMode === 'signup' ? 'signin' : 'signup');
   });
 
   $('f-progress').addEventListener('input', function () {
@@ -468,7 +725,6 @@ function init() {
   $('confirm-yes').addEventListener('click', function () { closeConfirm(true); });
   $('confirm-no').addEventListener('click', function () { closeConfirm(false); });
 
-  // Tapping the dimmed area closes the dialog.
   $('form-overlay').addEventListener('click', function (e) {
     if (e.target === this) { closeForm(); }
   });
@@ -482,7 +738,33 @@ function init() {
     else if (!$('form-overlay').hidden) { closeForm(); }
   });
 
-  showDashboard();
+  // The browser noticing the network come back is a good moment to retry.
+  window.addEventListener('online', function () { if (session) { loadProjects(); } });
+  window.addEventListener('offline', function () { if (session) { setOnline(false); } });
+}
+
+function init() {
+  fillStatusOptions();
+  wireEvents();
+  setAuthMode('signin');
+
+  if (!isConfigured()) {
+    showView('view-setup');
+    return;
+  }
+
+  client = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+    auth: { persistSession: true, autoRefreshToken: true }
+  });
+
+  client.auth.getSession().then(function (res) {
+    session = (res && res.data) ? res.data.session : null;
+    if (!session) { showView('view-auth'); return; }
+    $('account-email').textContent = session.user.email;
+    return loadProjects();
+  }).catch(function () {
+    showView('view-auth');
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);
