@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#faf7f2">
+  <title>Personal Project Tracker</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗂️</text></svg>">
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="wrap header-inner">
+      <div>
+        <h1>Personal Project Tracker</h1>
+        <p class="tagline">Your projects, in one calm place.</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <!-- ============ DASHBOARD ============ -->
+    <section id="view-dashboard">
+      <div class="toolbar">
+        <p class="count" id="project-count">0 projects</p>
+        <button class="btn btn-primary" id="btn-new">+ New Project</button>
+      </div>
+
+      <div class="grid" id="project-grid"></div>
+
+      <div class="empty" id="empty-state" hidden>
+        <p class="empty-title">No projects yet</p>
+        <p class="empty-text">Tap <strong>+ New Project</strong> to add your first one,<br>or load the four sample projects to see how it works.</p>
+        <button class="btn btn-quiet" id="btn-load-samples">Load sample projects</button>
+      </div>
+    </section>
+
+    <!-- ============ PROJECT DETAIL ============ -->
+    <section id="view-detail" hidden>
+      <button class="btn btn-quiet btn-back" id="btn-back">&larr; All projects</button>
+
+      <article class="detail-card">
+        <div class="detail-head">
+          <h2 id="d-name">—</h2>
+          <span class="chip" id="d-status">—</span>
+        </div>
+
+        <div class="detail-meta">
+          <div class="progress-block">
+            <div class="progress-row">
+              <span class="label">Progress</span>
+              <span class="progress-value" id="d-progress-text">0%</span>
+            </div>
+            <div class="bar"><div class="bar-fill" id="d-progress-bar"></div></div>
+          </div>
+          <div class="due-block">
+            <span class="label">Due date</span>
+            <span class="due-value" id="d-due">—</span>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h3>Goal</h3>
+          <p id="d-goal" class="body-text">—</p>
+        </div>
+
+        <div class="detail-section">
+          <h3>Current Status</h3>
+          <p id="d-current" class="body-text">—</p>
+        </div>
+
+        <div class="detail-section">
+          <h3>Completed Work</h3>
+          <ul id="d-completed" class="tick-list"></ul>
+        </div>
+
+        <div class="detail-section">
+          <h3>Next Actions</h3>
+          <ul id="d-next" class="arrow-list"></ul>
+        </div>
+
+        <div class="detail-section">
+          <h3>Notes</h3>
+          <p id="d-notes" class="body-text">—</p>
+        </div>
+
+        <div class="detail-actions">
+          <button class="btn btn-primary" id="btn-edit">Edit project</button>
+          <button class="btn btn-danger" id="btn-delete">Delete project</button>
+        </div>
+      </article>
+    </section>
+
+  </main>
+
+  <footer class="wrap app-footer">
+    <p class="footer-note">Saved in this browser only (localStorage). Nothing is sent anywhere.</p>
+    <button class="btn btn-quiet btn-small" id="btn-reset">Reset to sample data</button>
+  </footer>
+
+  <!-- ============ ADD / EDIT FORM ============ -->
+  <div class="overlay" id="form-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="form-title">
+      <div class="modal-head">
+        <h2 id="form-title">New Project</h2>
+      </div>
+
+      <form id="project-form" class="modal-body" novalidate>
+        <label class="field">
+          <span class="field-label">Project Name <span class="req">*</span></span>
+          <input type="text" id="f-name" required maxlength="120" placeholder="e.g. Drowning Prevention Project">
+          <span class="error" id="f-name-error" hidden>Please enter a project name.</span>
+        </label>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Status</span>
+            <select id="f-status"></select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Due Date</span>
+            <input type="date" id="f-due">
+          </label>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Progress <output id="f-progress-out" class="progress-out">0%</output></span>
+          <input type="range" id="f-progress" min="0" max="100" step="5" value="0">
+        </label>
+
+        <label class="field">
+          <span class="field-label">Goal</span>
+          <textarea id="f-goal" rows="2" placeholder="What does success look like?"></textarea>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Current Status</span>
+          <textarea id="f-current" rows="2" placeholder="Where does this stand right now?"></textarea>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Completed Work <span class="hint">one per line</span></span>
+          <textarea id="f-completed" rows="3" placeholder="Baseline data collected&#10;12 instructors trained"></textarea>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Next Actions <span class="hint">one per line — the first one shows on the dashboard</span></span>
+          <textarea id="f-next" rows="3" placeholder="Follow up on budget approval&#10;Draft progress report"></textarea>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Notes</span>
+          <textarea id="f-notes" rows="2" placeholder="Anything worth remembering."></textarea>
+        </label>
+      </form>
+
+      <div class="modal-foot">
+        <button class="btn btn-quiet" id="btn-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-save">Save project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CONFIRM DIALOG ============ -->
+  <div class="overlay" id="confirm-overlay" hidden>
+    <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <div class="modal-head">
+        <h2 id="confirm-title">Are you sure?</h2>
+      </div>
+      <div class="modal-body">
+        <p class="body-text" id="confirm-message">—</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-quiet" id="confirm-no">Cancel</button>
+        <button class="btn btn-danger" id="confirm-yes">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
