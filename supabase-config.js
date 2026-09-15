@@ -10,5 +10,5 @@
  *  ห้ามนำ service_role key มาใส่ตรงนี้เด็ดขาด — อันนั้นคือกุญแจผ่านทุกด่าน
  * ===================================================================== */
 
-window.SUPABASE_URL      = 'PASTE_YOUR_PROJECT_URL_HERE';
-window.SUPABASE_ANON_KEY = 'PASTE_YOUR_ANON_KEY_HERE';
+window.SUPABASE_URL      = 'https://qhlartlijebqczkiqfrw.supabase.co';
+window.SUPABASE_ANON_KEY = 'sb_publishable_wNIITG8fDyJtcB4WTfKf2A_-Am538O5';
