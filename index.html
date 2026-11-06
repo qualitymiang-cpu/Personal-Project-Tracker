@@ -45,11 +45,11 @@
       </div>
     </section>
 
-    <!-- ============ SIGN IN / SIGN UP ============ -->
+    <!-- ============ SIGN IN ============ -->
     <section id="view-auth" hidden>
       <div class="auth-card">
         <h2 id="auth-title">Sign in</h2>
-        <p class="auth-sub" id="auth-sub">Your projects are private to your account.</p>
+        <p class="auth-sub">This is a private tracker. Sign in to continue.</p>
 
         <form id="auth-form" novalidate>
           <label class="field">
@@ -59,19 +59,14 @@
 
           <label class="field">
             <span class="field-label">Password</span>
-            <input type="password" id="a-password" autocomplete="current-password" placeholder="At least 6 characters">
+            <input type="password" id="a-password" autocomplete="current-password" placeholder="Your password">
           </label>
 
           <p class="error auth-error" id="auth-error" hidden></p>
-          <p class="success auth-success" id="auth-success" hidden></p>
 
           <button type="submit" class="btn btn-primary btn-block" id="btn-auth-submit">Sign in</button>
         </form>
 
-        <p class="auth-switch">
-          <span id="auth-switch-text">First time here?</span>
-          <button class="link-btn" id="btn-auth-switch">Create an account</button>
-        </p>
       </div>
     </section>
 

@@ -64,7 +64,6 @@ var client = null;        // the Supabase client
 var session = null;       // the signed-in session, or null
 var projects = [];        // what is on screen
 var online = true;        // did the last network call succeed?
-var authMode = 'signin';  // 'signin' or 'signup'
 var currentId = null;     // project open in the detail view
 var editingId = null;     // project being edited in the form
 
@@ -219,11 +218,8 @@ function setOnline(isOnline) {
 function friendlyError(message) {
   var m = String(message || '');
   if (/invalid login credentials/i.test(m))     { return 'Wrong email or password.'; }
-  if (/email not confirmed/i.test(m))           { return 'Please confirm your email address first — check your inbox.'; }
-  if (/user already registered/i.test(m))       { return 'That email already has an account. Try signing in instead.'; }
-  if (/password should be at least/i.test(m))   { return 'Password must be at least 6 characters.'; }
-  if (/signups not allowed|signup is disabled/i.test(m)) { return 'New sign-ups are turned off for this app.'; }
-  if (/unable to validate email|invalid email/i.test(m)) { return 'That does not look like a valid email address.'; }
+  if (/email not confirmed/i.test(m))           { return 'This email address has not been confirmed yet.'; }
+  if (/invalid email|unable to validate email/i.test(m)) { return 'That does not look like a valid email address.'; }
   return m || 'Something went wrong.';
 }
 
@@ -421,25 +417,9 @@ function insertMany(list) {
  * Authentication
  * ===================================================== */
 
-function setAuthMode(mode) {
-  authMode = mode;
-  var signup = (mode === 'signup');
-  $('auth-title').textContent = signup ? 'Create your account' : 'Sign in';
-  $('auth-sub').textContent = signup
-    ? 'Pick a password you will remember. Your projects stay private to this account.'
-    : 'Your projects are private to your account.';
-  $('btn-auth-submit').textContent = signup ? 'Create account' : 'Sign in';
-  $('auth-switch-text').textContent = signup ? 'Already have an account?' : 'First time here?';
-  $('btn-auth-switch').textContent = signup ? 'Sign in instead' : 'Create an account';
-  $('a-password').setAttribute('autocomplete', signup ? 'new-password' : 'current-password');
-  $('auth-error').hidden = true;
-  $('auth-success').hidden = true;
-}
-
 function showAuthError(msg) {
   $('auth-error').textContent = msg;
   $('auth-error').hidden = false;
-  $('auth-success').hidden = true;
 }
 
 function submitAuth() {
@@ -455,22 +435,8 @@ function submitAuth() {
   btn.textContent = 'Please wait…';
   $('auth-error').hidden = true;
 
-  var call = (authMode === 'signup')
-    ? client.auth.signUp({ email: email, password: password })
-    : client.auth.signInWithPassword({ email: email, password: password });
-
-  call.then(function (res) {
+  client.auth.signInWithPassword({ email: email, password: password }).then(function (res) {
     if (res.error) { throw res.error; }
-
-    if (!res.data.session) {
-      // Sign-up succeeded but Supabase is waiting for email confirmation.
-      $('auth-success').textContent =
-        'Account created. Please open the confirmation email, then sign in.';
-      $('auth-success').hidden = false;
-      setAuthMode('signin');
-      $('auth-success').hidden = false;
-      return;
-    }
 
     session = res.data.session;
     $('account-email').textContent = session.user.email;
@@ -489,19 +455,19 @@ function submitAuth() {
 function signOut() {
   askConfirm('Sign out?', 'You will need your email and password to get back in.', 'Sign out')
     .then(function (yes) {
-      if (!yes) { return; }
-      return client.auth.signOut().catch(function () {});
-    })
-    .then(function () {
-      if (!session) { return; }
-      session = null;
-      projects = [];
-      currentId = null;
-      hideBanner();
-      $('a-email').value = '';
-      $('a-password').value = '';
-      setAuthMode('signin');
-      showView('view-auth');
+      if (!yes) { return; }   // Cancel: stay signed in, touch nothing
+
+      return client.auth.signOut().catch(function () {}).then(function () {
+        clearCache();         // needs `session` still set — it names the cache key
+        session = null;
+        projects = [];
+        currentId = null;
+        hideBanner();
+        $('a-email').value = '';
+        $('a-password').value = '';
+        $('auth-error').hidden = true;
+        showView('view-auth');
+      });
     });
 }
 
@@ -711,9 +677,6 @@ function wireEvents() {
   $('project-form').addEventListener('submit', function (e) { e.preventDefault(); saveForm(); });
 
   $('auth-form').addEventListener('submit', function (e) { e.preventDefault(); submitAuth(); });
-  $('btn-auth-switch').addEventListener('click', function () {
-    setAuthMode(authMode === 'signup' ? 'signin' : 'signup');
-  });
 
   $('f-progress').addEventListener('input', function () {
     $('f-progress-out').textContent = this.value + '%';
@@ -746,7 +709,6 @@ function wireEvents() {
 function init() {
   fillStatusOptions();
   wireEvents();
-  setAuthMode('signin');
 
   if (!isConfigured()) {
     showView('view-setup');
